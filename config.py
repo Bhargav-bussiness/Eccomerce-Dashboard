@@ -172,4 +172,10 @@ AD_COLUMN_MAP = {
     },
 }
 
-CACHE_TTL_SECONDS = 300  # how long data is cached before re-fetching from Google Sheets
+CACHE_TTL_SECONDS = 600  # how long DRR/ad-spend data is cached before re-fetching (was 300s;
+# raised to reduce how often we hit the Sheets API, after adding the SKU Master
+# feature meant a lot more tab reads happen per refresh cycle).
+
+SKU_MASTER_CACHE_TTL_SECONDS = 1800  # product/pricing data changes far less often than
+# daily sales figures, so this can safely be cached much longer — directly cuts down
+# how many extra API calls the SKU Master tab adds every time data refreshes.
