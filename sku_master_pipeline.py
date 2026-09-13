@@ -12,7 +12,7 @@ import re
 import pandas as pd
 import streamlit as st
 
-from config import CHANNELS, MASTER_SHEET, SKU_LOOKUP
+from config import CHANNELS, MASTER_SHEET, SKU_LOOKUP, SKU_MASTER_CACHE_TTL_SECONDS
 from sheets_connector import load_tab
 
 LONG_COLS = ["Channel", "Brand", "Category", "Variant", "Product Name (raw)",
@@ -96,7 +96,7 @@ def _row(channel, brand, category, variant, product_raw, channel_code, mrp, base
     }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=SKU_MASTER_CACHE_TTL_SECONDS, show_spinner=False)
 def _build_lookup(channel: str) -> dict:
     """Build a {code: shortname} dict from a channel's own lookup tab(s)."""
     conf = SKU_LOOKUP.get(channel)
@@ -120,7 +120,7 @@ def _build_lookup(channel: str) -> dict:
     return lookup
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=SKU_MASTER_CACHE_TTL_SECONDS, show_spinner=False)
 def get_sku_master() -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """Returns (long_df, comparison_df, warnings) — the live SKU Master."""
     warnings = []
