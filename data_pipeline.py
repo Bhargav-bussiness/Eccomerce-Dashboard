@@ -18,6 +18,32 @@ from sheets_connector import load_tab
 
 STANDARD_COLS = ["date", "channel", "brand", "product", "sku", "units", "revenue"]
 
+# Any parsed date outside this window is treated as bad data (typo, blank row,
+# stray header text, a serial-number glitch, etc.) rather than a real order date.
+MIN_VALID_DATE = pd.Timestamp("2015-01-01")
+MAX_VALID_DATE = pd.Timestamp("2035-12-31")
+
+
+def _safe_parse_dates(series: pd.Series) -> pd.Series:
+    """
+    Parse a column to datetimes and guarantee the result is plain
+    datetime64[ns] with anything garbage or out-of-range turned into NaT.
+
+    This exists because live Google Sheets occasionally contain a stray
+    value in a date column (bad manual entry, a leftover label, a serial
+    number) that `errors="coerce"` alone doesn't neutralize early enough —
+    pandas can end up representing it in a non-nanosecond resolution, which
+    then blows up later with OutOfBoundsDatetime when this channel's data
+    is concatenated with another channel's.
+    """
+    parsed = pd.to_datetime(series, errors="coerce", utc=False)
+    # Drop anything outside a sane business-data window BEFORE forcing to ns,
+    # so we never try to downcast an out-of-range value.
+    in_range = parsed.notna() & (parsed >= MIN_VALID_DATE) & (parsed <= MAX_VALID_DATE)
+    parsed = parsed.where(in_range, pd.NaT)
+    # Now safe to force a single consistent resolution across all channels.
+    return parsed.astype("datetime64[ns]")
+
 
 def _standardize_one(df: pd.DataFrame, channel: str) -> pd.DataFrame:
     if df.empty:
@@ -28,7 +54,7 @@ def _standardize_one(df: pd.DataFrame, channel: str) -> pd.DataFrame:
 
     # date
     date_col = cmap.get("date")
-    out["date"] = pd.to_datetime(df[date_col], errors="coerce") if date_col in df.columns else pd.NaT
+    out["date"] = _safe_parse_dates(df[date_col]) if date_col in df.columns else pd.NaT
 
     # brand / product / sku (best-effort — used for breakdown tables)
     for field in ("brand", "product", "sku"):
@@ -108,7 +134,8 @@ def get_ad_spend(channel: str) -> tuple[pd.DataFrame, list[str]]:
             warnings.append(f"{channel} / {tab}: {err}")
             continue
         out = pd.DataFrame(index=raw.index)
-        out["date"] = pd.to_datetime(raw.get(amap.get("date")), errors="coerce")
+        date_col = amap.get("date")
+        out["date"] = _safe_parse_dates(raw[date_col]) if date_col in raw.columns else pd.NaT
         out["brand"] = raw[amap["brand"]] if amap.get("brand") in raw.columns else None
         out["spends"] = pd.to_numeric(raw.get(amap.get("spends")), errors="coerce")
         out["impressions"] = pd.to_numeric(raw.get(amap.get("impressions")), errors="coerce")
