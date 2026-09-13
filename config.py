@@ -22,40 +22,40 @@ only when the *structure* (tab names) changes.
 # ---------------------------------------------------------------------------
 CHANNELS = {
     "Amazon": {
-        "sheet_url": "PASTE_AMAZON_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1uCXwc_eV3GimTl6B0EmcaKUbn-cMSdan-47ywTcoUIw/edit",
         "dump_tabs": ["Dump-Data"],
     },
     "Blinkit": {
-        "sheet_url": "PASTE_BLINKIT_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1FsMY1H5RoJioAlONakEOQk9xGIC8st670yDUpfmC6kI/edit",
         "dump_tabs": ["Total Dump"],
         "ad_tabs": ["Paid Dump"],
     },
     "Flipkart": {
-        "sheet_url": "PASTE_FLIPKART_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1XhCTXkSILrecRkplNjpQlsD10YDpx1OYaElRXmftUcM/edit",
         "dump_tabs": ["DUMP"],
     },
     "Meesho": {
-        "sheet_url": "PASTE_MEESHO_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1mrBatILDO8afwTjLJlUUYwvRZbI64fICBoDB6OguNt8/edit",
         # Meesho gets a NEW dump tab every month (e.g. "aug", "sep-dump").
         # Add each new month's tab name here as it appears.
         "dump_tabs": ["aug", "sep-dump"],
     },
     "Myntra": {
-        "sheet_url": "PASTE_MYNTRA_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1q7Yo8Cy35GDqi8XfRfPMGe0eTkRFzO3GOrHur8WVvCs/edit",
         "dump_tabs": ["net sale Myntra "],  # note: trailing space in source tab name
         "imp_tab": "IMP",
     },
     "Nykaa": {
-        "sheet_url": "PASTE_NYKAA_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/17NkrkfSmUZVGkwPg427g_nT5EOrUrh0PRUAACcWSPpk/edit",
         "dump_tabs": ["DUMP"],
     },
     "Purplle": {
-        "sheet_url": "PASTE_PURPLLE_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1IhW270U-uP2KQm70EIQ5t9TK-eojpzyUGmGZO5hTBIs/edit",
         # New month = new dump tab. Add each as it appears.
         "dump_tabs": ["June Dump", "July Dump", "August Dump", "Sept Dump"],
     },
     "Zepto": {
-        "sheet_url": "PASTE_ZEPTO_GOOGLE_SHEET_URL_HERE",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/10ZLs3k3JuvRLE3KOaAHZtMNtL7fzCl60EwQqvy0U_3c/edit",
         "dump_tabs": ["TOTAL DUMP DATA"],
         "ad_tabs": ["Paid Daily"],
     },
@@ -65,7 +65,7 @@ CHANNELS = {
 # Master Sheet (cross-channel pricing)
 # ---------------------------------------------------------------------------
 MASTER_SHEET = {
-    "sheet_url": "PASTE_MASTER_SHEET_GOOGLE_SHEET_URL_HERE",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1Z_oYwpiwkZZaL7R3NMuajcas_V6KlWdLvCsVEZ5WhzA/edit",
     "pricing_tabs": {
         "Amazon": "Amazon",
         "Blinkit": "Blinkit",
