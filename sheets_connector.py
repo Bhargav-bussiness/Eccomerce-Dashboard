@@ -6,6 +6,9 @@ and there's a manual "Refresh now" button in the sidebar (app.py) that
 clears the cache on demand.
 """
 
+import time
+import random
+
 import pandas as pd
 import streamlit as st
 import gspread
@@ -25,6 +28,51 @@ def _get_client():
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     return gspread.authorize(creds)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "429" in text or "Quota exceeded" in text or "RESOURCE_EXHAUSTED" in text
+
+
+def _with_retry(fn, *args, max_retries=5, base_delay=3, **kwargs):
+    """
+    Call fn(*args, **kwargs), retrying with exponential backoff (+ jitter)
+    specifically on a 429 rate-limit response. The Sheets API's default free
+    quota is small enough that this app can legitimately hit it — every
+    extra tab read (the SKU Master feature added ~12 more) makes that more
+    likely, especially right after a cache-clearing "Refresh now" or a cold
+    start with several people viewing at once. A short wait-and-retry
+    resolves it without the person ever seeing an error, instead of failing
+    immediately on the first hiccup.
+    """
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            last_exc = e
+            if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(delay)
+                continue
+            raise
+    raise last_exc
+
+
+@st.cache_resource(ttl=CACHE_TTL_SECONDS)
+def _open_spreadsheet(sheet_url: str):
+    """
+    Open a Google Sheet once and reuse the handle for every tab read against
+    it. Previously each load_tab() call re-opened the spreadsheet from
+    scratch even when reading multiple tabs from the same sheet (e.g.
+    Purplle's 4 monthly dump tabs) — that's an extra API call per tab for no
+    reason, and a meaningful chunk of what was pushing us over the read-quota
+    limit. Cached as a resource (not cache_data) since a gspread Spreadsheet
+    object isn't the kind of plain data cache_data is meant for.
+    """
+    client = _get_client()
+    return _with_retry(client.open_by_url, sheet_url)
 
 
 def _dedupe_headers(headers: list) -> list[str]:
@@ -69,9 +117,8 @@ def load_tab(sheet_url: str, tab_name: str) -> pd.DataFrame:
         return df
 
     try:
-        client = _get_client()
-        sh = client.open_by_url(sheet_url)
-        ws = sh.worksheet(tab_name)
+        sh = _open_spreadsheet(sheet_url)
+        ws = _with_retry(sh.worksheet, tab_name)
 
         # UNFORMATTED_VALUE returns Google Sheets' underlying serial numbers for
         # date cells (the same day-count system Excel uses) instead of a
@@ -79,7 +126,7 @@ def load_tab(sheet_url: str, tab_name: str) -> pd.DataFrame:
         # date like "08-12-2026" is genuinely ambiguous — "8th December" or
         # "December 8th" — and guessing wrong silently misplaces rows into the
         # wrong month. Serial numbers have no such ambiguity.
-        values = ws.get_all_values(value_render_option="UNFORMATTED_VALUE")
+        values = _with_retry(ws.get_all_values, value_render_option="UNFORMATTED_VALUE")
         if not values or len(values) < 1:
             df = pd.DataFrame()
             df.attrs["error"] = None
@@ -97,7 +144,14 @@ def load_tab(sheet_url: str, tab_name: str) -> pd.DataFrame:
         return df
     except Exception as e:  # noqa: BLE001 — surface any auth/API error to the UI
         df = pd.DataFrame()
-        df.attrs["error"] = f"Could not load '{tab_name}': {e}"
+        if _is_rate_limit_error(e):
+            df.attrs["error"] = (
+                f"Could not load '{tab_name}': Google Sheets API rate limit hit, even "
+                f"after retrying. Try 'Refresh now' again in a minute, or see the "
+                f"README's note on requesting a quota increase."
+            )
+        else:
+            df.attrs["error"] = f"Could not load '{tab_name}': {e}"
         return df
 
 
@@ -107,12 +161,12 @@ def list_tabs(sheet_url: str) -> list[str]:
     if not sheet_url or sheet_url.startswith("PASTE_"):
         return []
     try:
-        client = _get_client()
-        sh = client.open_by_url(sheet_url)
-        return [ws.title for ws in sh.worksheets()]
+        sh = _open_spreadsheet(sheet_url)
+        return [ws.title for ws in _with_retry(sh.worksheets)]
     except Exception:
         return []
 
 
 def clear_cache():
     st.cache_data.clear()
+    st.cache_resource.clear()
