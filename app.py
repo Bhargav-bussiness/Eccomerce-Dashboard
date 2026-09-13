@@ -1,15 +1,103 @@
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from config import CHANNELS, MASTER_SHEET
 from sheets_connector import clear_cache, list_tabs, load_tab
 from data_pipeline import get_all_drr, get_channel_drr, get_ad_spend, get_myntra_imp, get_pricing_tab
+from formatting import format_inr, format_inr_short, format_units_short
 
 st.set_page_config(page_title="Marketplace DRR Dashboard", layout="wide", page_icon="📈")
 
 ALL_CHANNELS = list(CHANNELS.keys())
 AD_CHANNELS = [c for c in ALL_CHANNELS if "ad_tabs" in CHANNELS[c]]
+
+# A single consistent palette used across every chart so a channel is always
+# the same color no matter which tab you're looking at.
+CHANNEL_COLORS = {
+    "Amazon": "#FF9900",
+    "Blinkit": "#F8CB46",
+    "Flipkart": "#2874F0",
+    "Meesho": "#9F2089",
+    "Myntra": "#FF3F6C",
+    "Nykaa": "#FC2779",
+    "Purplle": "#6A2C70",
+    "Zepto": "#8B2FC9",
+}
+PLOTLY_TEMPLATE = "plotly_dark"
+
+# ---------------------------------------------------------------------------
+# Global styling
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    .kpi-card {
+        background: linear-gradient(155deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin-bottom: 6px;
+    }
+    .kpi-label {
+        font-size: 0.8rem;
+        color: rgba(255,255,255,0.55);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 6px;
+    }
+    .kpi-value {
+        font-size: 1.9rem;
+        font-weight: 700;
+        line-height: 1.1;
+    }
+    .kpi-sub {
+        font-size: 0.78rem;
+        color: rgba(255,255,255,0.4);
+        margin-top: 4px;
+    }
+    .section-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        margin: 22px 0 8px 0;
+        color: rgba(255,255,255,0.9);
+    }
+    div[data-testid="stMetric"] { display: none; } /* we use custom KPI cards instead */
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def kpi_card(label: str, value: str, sub: str = "") -> str:
+    return f"""
+    <div class="kpi-card">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value">{value}</div>
+        <div class="kpi-sub">{sub}</div>
+    </div>
+    """
+
+
+def section(title: str):
+    st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
+
+
+def style_fig(fig, y_title=None):
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Arial, sans-serif", size=13),
+        margin=dict(l=10, r=10, t=40, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        hoverlabel=dict(font_size=13),
+    )
+    if y_title:
+        fig.update_yaxes(title=y_title)
+    return fig
+
 
 # ---------------------------------------------------------------------------
 # Sidebar — filters + manual refresh
@@ -50,6 +138,11 @@ tab_overview, tab_channel, tab_ads, tab_pricing, tab_raw = st.tabs(
     ["📊 Overview", "🔍 Channel Deep-Dive", "💰 Ad Spends & ROAS", "🏷️ Pricing (Master Sheet)", "🗂️ Raw Sheet Explorer"]
 )
 
+
+def channel_colors_for(names):
+    return {n: CHANNEL_COLORS.get(n, "#999999") for n in names}
+
+
 # ---------------------------------------------------------------------------
 # OVERVIEW
 # ---------------------------------------------------------------------------
@@ -57,32 +150,72 @@ with tab_overview:
     if drr_df.empty:
         st.info("No data loaded yet — configure your Google Sheet URLs in config.py.")
     else:
-        c1, c2, c3, c4 = st.columns(4)
         n_days = max(drr_df["date"].dt.date.nunique(), 1)
-        c1.metric("Total Revenue", f"₹{drr_df['revenue'].sum():,.0f}")
-        c2.metric("Total Units", f"{drr_df['units'].sum():,.0f}")
-        c3.metric("Avg Daily Revenue (DRR)", f"₹{drr_df['revenue'].sum() / n_days:,.0f}")
-        c4.metric("Avg Daily Units (DRR)", f"{drr_df['units'].sum() / n_days:,.1f}")
+        total_rev = drr_df["revenue"].sum()
+        total_units = drr_df["units"].sum()
 
-        st.markdown("#### Revenue trend by channel")
-        daily = drr_df.groupby([drr_df["date"].dt.date, "channel"], as_index=False)["revenue"].sum()
-        daily.columns = ["date", "channel", "revenue"]
-        fig = px.line(daily, x="date", y="revenue", color="channel", markers=True)
-        st.plotly_chart(fig, use_container_width=True)
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(kpi_card("Total Revenue", format_inr_short(total_rev), format_inr(total_rev)), unsafe_allow_html=True)
+        with c2:
+            st.markdown(kpi_card("Total Units", format_units_short(total_units), f"{total_units:,.0f} units"), unsafe_allow_html=True)
+        with c3:
+            st.markdown(kpi_card("Avg Daily Revenue (DRR)", format_inr_short(total_rev / n_days), format_inr(total_rev / n_days) + " / day"), unsafe_allow_html=True)
+        with c4:
+            st.markdown(kpi_card("Avg Daily Units (DRR)", f"{total_units / n_days:,.0f}", f"{total_units / n_days:,.1f} units / day"), unsafe_allow_html=True)
+
+        section("Revenue trend")
+        show_breakdown = st.toggle("Break down by channel", value=False)
+        if show_breakdown:
+            daily = drr_df.groupby([drr_df["date"].dt.date, "channel"], as_index=False)["revenue"].sum()
+            daily.columns = ["date", "channel", "revenue"]
+            daily["revenue_label"] = daily["revenue"].apply(format_inr)
+            fig = px.line(
+                daily, x="date", y="revenue", color="channel", markers=True,
+                color_discrete_map=channel_colors_for(daily["channel"].unique()),
+                custom_data=["revenue_label", "channel"],
+            )
+            fig.update_traces(hovertemplate="%{customdata[1]}<br>%{x}<br>%{customdata[0]}<extra></extra>")
+        else:
+            daily = drr_df.groupby(drr_df["date"].dt.date, as_index=False)["revenue"].sum()
+            daily.columns = ["date", "revenue"]
+            daily["revenue_label"] = daily["revenue"].apply(format_inr)
+            fig = px.line(
+                daily, x="date", y="revenue", markers=True,
+                custom_data=["revenue_label"],
+                color_discrete_sequence=["#4C9AFF"],
+            )
+            fig.update_traces(hovertemplate="%{x}<br>%{customdata[0]}<extra></extra>")
+        st.plotly_chart(style_fig(fig, y_title="Revenue (₹)"), use_container_width=True)
 
         cA, cB = st.columns(2)
         with cA:
-            st.markdown("#### Revenue share by channel")
+            section("Revenue share by channel")
             by_channel = drr_df.groupby("channel", as_index=False)["revenue"].sum().sort_values("revenue", ascending=False)
-            st.plotly_chart(px.pie(by_channel, names="channel", values="revenue", hole=0.4), use_container_width=True)
+            by_channel["revenue_label"] = by_channel["revenue"].apply(format_inr)
+            fig_pie = px.pie(
+                by_channel, names="channel", values="revenue", hole=0.55,
+                color="channel", color_discrete_map=channel_colors_for(by_channel["channel"]),
+                custom_data=["revenue_label"],
+            )
+            fig_pie.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{customdata[0]}<extra></extra>")
+            st.plotly_chart(style_fig(fig_pie), use_container_width=True)
         with cB:
-            st.markdown("#### Units by channel")
+            section("Units by channel")
             by_channel_u = drr_df.groupby("channel", as_index=False)["units"].sum().sort_values("units", ascending=False)
-            st.plotly_chart(px.bar(by_channel_u, x="channel", y="units"), use_container_width=True)
+            fig_bar = px.bar(
+                by_channel_u, x="channel", y="units", color="channel",
+                color_discrete_map=channel_colors_for(by_channel_u["channel"]),
+                text=by_channel_u["units"].apply(format_units_short),
+            )
+            fig_bar.update_traces(textposition="outside", showlegend=False)
+            st.plotly_chart(style_fig(fig_bar, y_title="Units"), use_container_width=True)
 
-        st.markdown("#### Daily DRR summary")
+        section("Daily DRR summary")
         pivot = drr_df.pivot_table(index=drr_df["date"].dt.date, columns="channel", values="revenue", aggfunc="sum", fill_value=0)
-        st.dataframe(pivot.sort_index(ascending=False), use_container_width=True)
+        pivot = pivot.sort_index(ascending=False)
+        display_pivot = pivot.map(format_inr)
+        st.dataframe(display_pivot, use_container_width=True)
 
     if drr_warnings:
         with st.expander(f"⚠️ {len(drr_warnings)} data warning(s)"):
@@ -98,24 +231,38 @@ with tab_channel:
     if ch_df.empty:
         st.info(f"No data available for {ch} yet.")
     else:
+        rev_total = ch_df["revenue"].sum()
+        units_total = ch_df["units"].sum()
         c1, c2 = st.columns(2)
-        c1.metric(f"{ch} — Total Revenue", f"₹{ch_df['revenue'].sum():,.0f}")
-        c2.metric(f"{ch} — Total Units", f"{ch_df['units'].sum():,.0f}")
+        with c1:
+            st.markdown(kpi_card(f"{ch} — Total Revenue", format_inr_short(rev_total), format_inr(rev_total)), unsafe_allow_html=True)
+        with c2:
+            st.markdown(kpi_card(f"{ch} — Total Units", format_units_short(units_total), f"{units_total:,.0f} units"), unsafe_allow_html=True)
 
         daily = ch_df.groupby(ch_df["date"].dt.date, as_index=False).agg(revenue=("revenue", "sum"), units=("units", "sum"))
-        fig = px.bar(daily, x="date", y="revenue", title=f"{ch} — Daily Revenue")
-        st.plotly_chart(fig, use_container_width=True)
-        fig2 = px.line(daily, x="date", y="units", markers=True, title=f"{ch} — Daily Units")
-        st.plotly_chart(fig2, use_container_width=True)
+        daily["revenue_label"] = daily["revenue"].apply(format_inr)
+
+        section(f"{ch} — Daily Revenue")
+        fig = px.bar(daily, x="date", y="revenue", custom_data=["revenue_label"],
+                     color_discrete_sequence=[CHANNEL_COLORS.get(ch, "#4C9AFF")])
+        fig.update_traces(hovertemplate="%{x}<br>%{customdata[0]}<extra></extra>")
+        st.plotly_chart(style_fig(fig, y_title="Revenue (₹)"), use_container_width=True)
+
+        section(f"{ch} — Daily Units")
+        fig2 = px.line(daily, x="date", y="units", markers=True,
+                        color_discrete_sequence=[CHANNEL_COLORS.get(ch, "#4C9AFF")])
+        st.plotly_chart(style_fig(fig2, y_title="Units"), use_container_width=True)
 
         cA, cB = st.columns(2)
         with cA:
-            st.markdown("##### Top brands")
+            st.markdown('<div class="section-title">Top brands</div>', unsafe_allow_html=True)
             top_brand = ch_df.groupby("brand", as_index=False)["revenue"].sum().sort_values("revenue", ascending=False).head(15)
+            top_brand["revenue"] = top_brand["revenue"].apply(format_inr)
             st.dataframe(top_brand, use_container_width=True, hide_index=True)
         with cB:
-            st.markdown("##### Top SKUs / products")
+            st.markdown('<div class="section-title">Top SKUs / products</div>', unsafe_allow_html=True)
             top_sku = ch_df.groupby(["product", "sku"], as_index=False)["revenue"].sum().sort_values("revenue", ascending=False).head(15)
+            top_sku["revenue"] = top_sku["revenue"].apply(format_inr)
             st.dataframe(top_sku, use_container_width=True, hide_index=True)
 
     if ch_warnings:
@@ -130,7 +277,7 @@ with tab_ads:
     if not AD_CHANNELS:
         st.info("No channels are configured with ad-spend tabs (see config.py -> ad_tabs).")
     for ch in [c for c in AD_CHANNELS if c in selected_channels]:
-        st.markdown(f"### {ch}")
+        section(ch)
         ad_df, ad_warnings = get_ad_spend(ch)
         if ad_df.empty:
             st.info(f"No ad-spend data available for {ch} yet.")
@@ -139,15 +286,26 @@ with tab_ads:
                 spends=("spends", "sum"), revenue=("revenue", "sum")
             )
             daily["roas"] = (daily["revenue"] / daily["spends"]).round(2)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Spend", f"₹{daily['spends'].sum():,.0f}")
-            c2.metric("Total Attributed Revenue", f"₹{daily['revenue'].sum():,.0f}")
-            c3.metric("Blended ROAS", f"{(daily['revenue'].sum() / daily['spends'].sum()):.2f}x" if daily['spends'].sum() else "—")
+            spend_total, rev_total = daily["spends"].sum(), daily["revenue"].sum()
+            blended_roas = f"{(rev_total / spend_total):.2f}x" if spend_total else "—"
 
-            fig = px.bar(daily, x="date", y="spends", title=f"{ch} — Daily Ad Spend")
-            st.plotly_chart(fig, use_container_width=True)
-            fig2 = px.line(daily, x="date", y="roas", markers=True, title=f"{ch} — Daily ROAS")
-            st.plotly_chart(fig2, use_container_width=True)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(kpi_card("Total Spend", format_inr_short(spend_total), format_inr(spend_total)), unsafe_allow_html=True)
+            with c2:
+                st.markdown(kpi_card("Total Attributed Revenue", format_inr_short(rev_total), format_inr(rev_total)), unsafe_allow_html=True)
+            with c3:
+                st.markdown(kpi_card("Blended ROAS", blended_roas, "revenue ÷ spend"), unsafe_allow_html=True)
+
+            daily["spends_label"] = daily["spends"].apply(format_inr)
+            fig = px.bar(daily, x="date", y="spends", custom_data=["spends_label"],
+                         color_discrete_sequence=[CHANNEL_COLORS.get(ch, "#4C9AFF")])
+            fig.update_traces(hovertemplate="%{x}<br>%{customdata[0]}<extra></extra>")
+            st.plotly_chart(style_fig(fig, y_title="Ad Spend (₹)"), use_container_width=True)
+
+            fig2 = px.line(daily, x="date", y="roas", markers=True,
+                            color_discrete_sequence=[CHANNEL_COLORS.get(ch, "#4C9AFF")])
+            st.plotly_chart(style_fig(fig2, y_title="ROAS (x)"), use_container_width=True)
         if ad_warnings:
             with st.expander(f"⚠️ warnings for {ch}"):
                 for w in ad_warnings:
@@ -155,14 +313,12 @@ with tab_ads:
         st.markdown("---")
 
     if "Myntra" in selected_channels:
-        st.markdown("### Myntra — Style Performance (impressions / clicks / purchases)")
+        section("Myntra — Style Performance (impressions / clicks / purchases)")
         imp_df, err = get_myntra_imp()
         if err:
             st.info(err)
         elif not imp_df.empty:
             imp_df = imp_df.copy()
-            # Sheet values arrive as strings; make the numeric columns actually
-            # numeric so sorting/display works even with blank or messy cells.
             for col in ["Impressions", "Clicks", "Add to Carts", "Purchases", "Return %", "Consideration %", "Conversion %", "Rating"]:
                 if col in imp_df.columns:
                     imp_df[col] = pd.to_numeric(imp_df[col], errors="coerce")
