@@ -74,6 +74,16 @@ def _parse_one_date(value):
     return dayfirst_guess if pd.notna(dayfirst_guess) else monthfirst_guess
 
 
+def _swap_day_month(ts: pd.Timestamp):
+    """Swap a timestamp's day and month, e.g. 2026-12-08 -> 2026-08-12.
+    Returns the original timestamp unchanged if the swap isn't a valid date
+    (e.g. day component > 12, so it can't become a month)."""
+    try:
+        return pd.Timestamp(year=ts.year, month=ts.day, day=ts.month)
+    except ValueError:
+        return ts
+
+
 def _safe_parse_dates(series: pd.Series) -> pd.Series:
     """
     Parse a column to datetimes and guarantee the result is plain
@@ -86,10 +96,22 @@ def _safe_parse_dates(series: pd.Series) -> pd.Series:
     then blows up later with OutOfBoundsDatetime when this channel's data
     is concatenated with another channel's. It also resolves day/month
     ambiguity by preferring Sheets' serial-number representation over
-    guessing at a formatted string (see _parse_one_date).
+    guessing at a formatted string (see _parse_one_date), and as a final
+    safety net, swaps day/month for anything that still lands in the future
+    — confirmed correct behavior (a real example: a row stored as
+    2026-12-08 was confirmed to actually mean 2026-08-12).
     """
     parsed = series.apply(_parse_one_date)
     parsed = pd.to_datetime(parsed, errors="coerce")
+
+    today = pd.Timestamp.now().normalize()
+    still_future = parsed.notna() & (parsed > today)
+    if still_future.any():
+        corrected = parsed.copy()
+        corrected.loc[still_future] = parsed.loc[still_future].apply(_swap_day_month)
+        swap_helped = still_future & corrected.notna() & (corrected <= today) & (corrected >= MIN_VALID_DATE)
+        parsed = parsed.where(~swap_helped, corrected)
+
     # Drop anything outside a sane business-data window BEFORE forcing to ns,
     # so we never try to downcast an out-of-range value.
     in_range = parsed.notna() & (parsed >= MIN_VALID_DATE) & (parsed <= MAX_VALID_DATE)
@@ -176,24 +198,22 @@ def get_channel_drr(channel: str) -> tuple[pd.DataFrame, list[str]]:
             warnings.append(note)
     combined = pd.concat(parsed_frames, ignore_index=True) if parsed_frames else pd.DataFrame(columns=STANDARD_COLS)
 
-    # A row dated after today is never a real sale — it means a date got
-    # stored wrong at the source (confirmed: these are genuine Date-typed
-    # cells holding the wrong value, not a text-parsing ambiguity we can
-    # resolve). Rather than let a handful of wrong dates distort the visible
-    # totals and charts, exclude them here and say exactly which rows and
-    # dates, so they can be corrected directly in the Google Sheet.
+    # A row still dated after today at this point means even a day/month
+    # swap didn't produce a valid past date (e.g. day component > 12, so it
+    # can't become a month) — genuinely unresolvable here. Excluded from
+    # totals/charts so it doesn't distort them, with the exact rows named
+    # so they can be corrected directly in the Google Sheet.
     today = pd.Timestamp.now().normalize()
     is_future = combined["date"] > today
     if is_future.any():
         n = int(is_future.sum())
         dates = ", ".join(sorted(combined.loc[is_future, "date"].dt.strftime("%d-%m-%Y").unique())[:5])
         warnings.append(
-            f"{channel}: EXCLUDED {n} row(s) dated after today ({dates}"
+            f"{channel}: EXCLUDED {n} row(s) still dated after today ({dates}"
             f"{'…' if is_future.sum() > 5 else ''}) from all totals and charts — "
-            f"these dates are stored incorrectly in the source Google Sheet "
-            f"(confirmed as real Date cells, not a text-parsing issue) and need "
-            f"a manual correction there. Until fixed, that data simply won't "
-            f"appear rather than showing under the wrong day."
+            f"a day/month swap was tried automatically and didn't resolve these "
+            f"(so this is a data-entry error beyond a simple swap), and they need "
+            f"a manual correction directly in the source Google Sheet."
         )
         combined = combined[~is_future]
 
