@@ -67,10 +67,13 @@ def load_tab(sheet_url: str, tab_name: str) -> pd.DataFrame:
         sh = client.open_by_url(sheet_url)
         ws = sh.worksheet(tab_name)
 
-        # get_all_values (raw strings) is far more forgiving than
-        # get_all_records — it never errors on blank/duplicate headers,
-        # which real marketplace exports have plenty of.
-        values = ws.get_all_values()
+        # UNFORMATTED_VALUE returns Google Sheets' underlying serial numbers for
+        # date cells (the same day-count system Excel uses) instead of a
+        # locale-dependent formatted string. This matters because a formatted
+        # date like "08-12-2026" is genuinely ambiguous — "8th December" or
+        # "December 8th" — and guessing wrong silently misplaces rows into the
+        # wrong month. Serial numbers have no such ambiguity.
+        values = ws.get_all_values(value_render_option="UNFORMATTED_VALUE")
         if not values or len(values) < 1:
             df = pd.DataFrame()
             df.attrs["error"] = None
