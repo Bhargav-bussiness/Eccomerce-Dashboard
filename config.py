@@ -74,7 +74,25 @@ MASTER_SHEET = {
         "Purplle": "Purplle",
         "Myntra": "Myntra",
         "Nykaa": "Nykaa",
+        "Flipkart": "FK seasonal Prices sheet",
     },
+}
+
+# ---------------------------------------------------------------------------
+# SKU Master: each channel's own SKU-code -> short-name lookup, where one
+# exists (found inside that channel's own dump/reporting sheet). These are
+# the team's real internal codes (e.g. "RM SS PO2"), which is a far more
+# reliable join key than guessing from a full marketing title. Channels not
+# listed here (Blinkit, Zepto, Meesho, Nykaa) have no such lookup in their
+# sheets, so the SKU Master falls back to parsing the product name directly
+# for those — lower confidence, clearly labeled as such in the output.
+# ---------------------------------------------------------------------------
+SKU_LOOKUP = {
+    "Amazon": {"tab": "Dump-Data", "code_col": "sku", "shortname_col": "Short name"},
+    "Purplle": {"tabs": ["August Dump", "Sept Dump"], "code_col": "sku",
+                "shortname_cols": ["short names", "short name"]},
+    "Myntra": {"tab": "IMP", "code_col": "Style ID", "shortname_col": "SHORTNAMES"},
+    "Flipkart": {"tab": "Sheet3", "code_col": "FSN", "shortname_col": "ITEM"},
 }
 
 # ---------------------------------------------------------------------------
