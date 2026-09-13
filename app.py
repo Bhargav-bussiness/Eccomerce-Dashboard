@@ -160,7 +160,15 @@ with tab_ads:
         if err:
             st.info(err)
         elif not imp_df.empty:
-            st.dataframe(imp_df.sort_values("Purchases", ascending=False), use_container_width=True, hide_index=True)
+            imp_df = imp_df.copy()
+            # Sheet values arrive as strings; make the numeric columns actually
+            # numeric so sorting/display works even with blank or messy cells.
+            for col in ["Impressions", "Clicks", "Add to Carts", "Purchases", "Return %", "Consideration %", "Conversion %", "Rating"]:
+                if col in imp_df.columns:
+                    imp_df[col] = pd.to_numeric(imp_df[col], errors="coerce")
+            if "Purchases" in imp_df.columns:
+                imp_df = imp_df.sort_values("Purchases", ascending=False, na_position="last")
+            st.dataframe(imp_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
 # PRICING (Master Sheet)
