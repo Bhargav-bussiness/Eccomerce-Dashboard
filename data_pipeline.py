@@ -120,9 +120,34 @@ def _safe_parse_dates(series: pd.Series) -> pd.Series:
     return parsed.astype("datetime64[ns]")
 
 
+def _empty_standard_frame() -> pd.DataFrame:
+    """An empty STANDARD_COLS frame with 'date' explicitly typed as
+    datetime64[ns] — needed so concatenating it with real data never
+    silently downgrades the combined 'date' column to plain 'object' dtype
+    (which breaks any later .dt accessor use)."""
+    return pd.DataFrame({
+        "date": pd.Series(dtype="datetime64[ns]"),
+        "channel": pd.Series(dtype="object"),
+        "brand": pd.Series(dtype="object"),
+        "product": pd.Series(dtype="object"),
+        "sku": pd.Series(dtype="object"),
+        "units": pd.Series(dtype="float64"),
+        "revenue": pd.Series(dtype="float64"),
+    })[STANDARD_COLS]
+
+
+def _ensure_date_dtype(df: pd.DataFrame) -> pd.DataFrame:
+    """Final safety net: guarantee 'date' is datetime64[ns] no matter which
+    concat path produced this frame."""
+    if "date" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["date"]):
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
 def _standardize_one(df: pd.DataFrame, channel: str) -> tuple[pd.DataFrame, str | None]:
     if df.empty:
-        return pd.DataFrame(columns=STANDARD_COLS), None
+        return _empty_standard_frame(), None
 
     cmap = COLUMN_MAP.get(channel, {})
 
@@ -149,6 +174,15 @@ def _standardize_one(df: pd.DataFrame, channel: str) -> tuple[pd.DataFrame, str 
     for field in ("brand", "product", "sku"):
         col = cmap.get(field)
         out[field] = df[col] if col in df.columns else None
+
+    if channel == "Blinkit" and cmap.get("brand") is None:
+        # DUMP DATA has no explicit Brand column; derive it from item_name,
+        # which only ever contains "Reginald..." or "Molecular..." products.
+        product_col = cmap.get("product")
+        names = df[product_col].astype(str).str.lower() if product_col in df.columns else pd.Series([""] * len(df), index=df.index)
+        out["brand"] = names.apply(
+            lambda n: "Reginald Men" if "reginald" in n else ("Molecular Company" if "molecular" in n else "Unknown")
+        )
 
     # units
     units_col = cmap.get("units")
@@ -196,7 +230,8 @@ def get_channel_drr(channel: str) -> tuple[pd.DataFrame, list[str]]:
         parsed_frames.append(standardized)
         if note:
             warnings.append(note)
-    combined = pd.concat(parsed_frames, ignore_index=True) if parsed_frames else pd.DataFrame(columns=STANDARD_COLS)
+    combined = pd.concat(parsed_frames, ignore_index=True) if parsed_frames else _empty_standard_frame()
+    combined = _ensure_date_dtype(combined)
 
     # A row still dated after today at this point means even a day/month
     # swap didn't produce a valid past date (e.g. day component > 12, so it
@@ -227,7 +262,8 @@ def get_all_drr(channels: list[str]) -> tuple[pd.DataFrame, list[str]]:
         df, warns = get_channel_drr(ch)
         all_frames.append(df)
         all_warnings.extend(warns)
-    combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame(columns=STANDARD_COLS)
+    combined = pd.concat(all_frames, ignore_index=True) if all_frames else _empty_standard_frame()
+    combined = _ensure_date_dtype(combined)
     return combined, all_warnings
 
 
@@ -260,7 +296,10 @@ def get_ad_spend(channel: str) -> tuple[pd.DataFrame, list[str]]:
         out = out.dropna(subset=["date"])
         frames.append(out[cols])
 
-    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=cols)
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame({
+        "date": pd.Series(dtype="datetime64[ns]"), **{c: pd.Series(dtype="object") for c in cols if c != "date"}
+    })[cols]
+    combined = _ensure_date_dtype(combined)
     return combined, warnings
 
 
