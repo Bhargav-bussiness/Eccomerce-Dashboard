@@ -27,6 +27,29 @@ def _get_client():
     return gspread.authorize(creds)
 
 
+def _dedupe_headers(headers: list[str]) -> list[str]:
+    """
+    Turn a raw header row into safe, unique column names.
+    Blank cells become col_N; repeated names get a _2, _3... suffix.
+    This is needed because several of your real sheets have multiple
+    blank trailing header cells (leftover formatting), which gspread's
+    get_all_records() refuses to handle on its own.
+    """
+    seen: dict[str, int] = {}
+    result = []
+    for i, h in enumerate(headers):
+        h = (h or "").strip()
+        if h == "":
+            h = f"col_{i + 1}"
+        if h in seen:
+            seen[h] += 1
+            h = f"{h}_{seen[h]}"
+        else:
+            seen[h] = 0
+        result.append(h)
+    return result
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def load_tab(sheet_url: str, tab_name: str) -> pd.DataFrame:
     """
@@ -43,8 +66,20 @@ def load_tab(sheet_url: str, tab_name: str) -> pd.DataFrame:
         client = _get_client()
         sh = client.open_by_url(sheet_url)
         ws = sh.worksheet(tab_name)
-        records = ws.get_all_records()
-        df = pd.DataFrame(records)
+
+        # get_all_values (raw strings) is far more forgiving than
+        # get_all_records — it never errors on blank/duplicate headers,
+        # which real marketplace exports have plenty of.
+        values = ws.get_all_values()
+        if not values or len(values) < 1:
+            df = pd.DataFrame()
+            df.attrs["error"] = None
+            return df
+
+        headers = _dedupe_headers(values[0])
+        body = values[1:]
+        df = pd.DataFrame(body, columns=headers)
+        df = df.replace("", pd.NA)  # blank cells -> NA instead of empty string
         df.attrs["error"] = None
         return df
     except gspread.exceptions.WorksheetNotFound:
