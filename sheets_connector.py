@@ -27,20 +27,26 @@ def _get_client():
     return gspread.authorize(creds)
 
 
-def _dedupe_headers(headers: list[str]) -> list[str]:
+def _dedupe_headers(headers: list) -> list[str]:
     """
     Turn a raw header row into safe, unique column names.
     Blank cells become col_N; repeated names get a _2, _3... suffix.
     This is needed because several of your real sheets have multiple
     blank trailing header cells (leftover formatting), which gspread's
-    get_all_records() refuses to handle on its own.
+    get_all_records() refuses to handle on its own. It also has to cope
+    with a header cell that's a number rather than text (confirmed on
+    Purplle's July Dump tab) since UNFORMATTED_VALUE returns those as
+    actual int/float, not strings.
     """
     seen: dict[str, int] = {}
     result = []
     for i, h in enumerate(headers):
-        h = (h or "").strip()
-        if h == "":
+        if h is None or h == "":
             h = f"col_{i + 1}"
+        else:
+            h = str(h).strip()
+            if h == "":
+                h = f"col_{i + 1}"
         if h in seen:
             seen[h] += 1
             h = f"{h}_{seen[h]}"
