@@ -27,7 +27,11 @@ CHANNELS = {
     },
     "Blinkit": {
         "sheet_url": "https://docs.google.com/spreadsheets/d/1FsMY1H5RoJioAlONakEOQk9xGIC8st670yDUpfmC6kI/edit",
-        "dump_tabs": ["Total Dump"],
+        # NOTE: "Total Dump" stops updating after 9 June and has a broken
+        # item_name column (98.5% of rows are "#REF!"). "DUMP DATA" is the
+        # tab that's actually kept current (through Sept) with clean,
+        # correct product names — confirmed by checking both directly.
+        "dump_tabs": ["DUMP DATA"],
         "ad_tabs": ["Paid Dump"],
     },
     "Flipkart": {
@@ -106,8 +110,10 @@ COLUMN_MAP = {
         "brand": "Brand", "product": "product-name", "sku": "sku",
     },
     "Blinkit": {
-        "date": "Date", "units": "Unit", "revenue": "Sale",
-        "brand": "Brand", "product": "item_name", "sku": "item_id",
+        "date": "date", "units": "qty_sold", "revenue": "mrp",
+        # No explicit Brand column in DUMP DATA — derived from item_name
+        # (confirmed: only "Reginald..." or "Molecular..." products exist).
+        "brand": None, "product": "item_name", "sku": "item_id",
     },
     "Flipkart": {
         "date": "Order Date", "units": "Final Sale Units", "revenue": "Final Sale Amount",
