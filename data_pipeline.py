@@ -24,6 +24,37 @@ MIN_VALID_DATE = pd.Timestamp("2015-01-01")
 MAX_VALID_DATE = pd.Timestamp("2035-12-31")
 
 
+import re
+
+SHEETS_EPOCH = pd.Timestamp("1899-12-30")  # Google Sheets / Excel serial-date epoch
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}")  # YYYY-MM-DD... is never ambiguous
+
+
+def _parse_one_date(value):
+    """Parse a single cell that may be a Sheets serial number, a date object,
+    a text date, or blank."""
+    if value is None or value == "":
+        return pd.NaT
+    if isinstance(value, bool):
+        return pd.NaT
+    if isinstance(value, (int, float)):
+        # Serial day-count from Google Sheets — unambiguous, no day/month guessing.
+        try:
+            return SHEETS_EPOCH + pd.to_timedelta(float(value), unit="D")
+        except (ValueError, OverflowError):
+            return pd.NaT
+    text = str(value).strip()
+    if _ISO_DATE_RE.match(text):
+        # Already YYYY-MM-DD — unambiguous, so dayfirst must NOT be applied
+        # here (dayfirst=True incorrectly swaps month/day even on ISO strings).
+        return pd.to_datetime(text, errors="coerce")
+    # Fallback: a genuinely ambiguous text date (e.g. "12-08-2026"). dayfirst=True
+    # because every source sheet here is an Indian marketplace export
+    # (DD-MM-YYYY convention) — parsing US-style by default is what silently
+    # swapped day/month before.
+    return pd.to_datetime(text, errors="coerce", dayfirst=True)
+
+
 def _safe_parse_dates(series: pd.Series) -> pd.Series:
     """
     Parse a column to datetimes and guarantee the result is plain
@@ -34,9 +65,12 @@ def _safe_parse_dates(series: pd.Series) -> pd.Series:
     number) that `errors="coerce"` alone doesn't neutralize early enough —
     pandas can end up representing it in a non-nanosecond resolution, which
     then blows up later with OutOfBoundsDatetime when this channel's data
-    is concatenated with another channel's.
+    is concatenated with another channel's. It also resolves day/month
+    ambiguity by preferring Sheets' serial-number representation over
+    guessing at a formatted string (see _parse_one_date).
     """
-    parsed = pd.to_datetime(series, errors="coerce", utc=False)
+    parsed = series.apply(_parse_one_date)
+    parsed = pd.to_datetime(parsed, errors="coerce")
     # Drop anything outside a sane business-data window BEFORE forcing to ns,
     # so we never try to downcast an out-of-range value.
     in_range = parsed.notna() & (parsed >= MIN_VALID_DATE) & (parsed <= MAX_VALID_DATE)
@@ -45,11 +79,25 @@ def _safe_parse_dates(series: pd.Series) -> pd.Series:
     return parsed.astype("datetime64[ns]")
 
 
-def _standardize_one(df: pd.DataFrame, channel: str) -> pd.DataFrame:
+def _standardize_one(df: pd.DataFrame, channel: str) -> tuple[pd.DataFrame, str | None]:
     if df.empty:
-        return pd.DataFrame(columns=STANDARD_COLS)
+        return pd.DataFrame(columns=STANDARD_COLS), None
 
     cmap = COLUMN_MAP.get(channel, {})
+
+    exclusion_note = None
+    status_col = cmap.get("status_col")
+    excluded_statuses = cmap.get("excluded_statuses")
+    if status_col and excluded_statuses and status_col in df.columns:
+        is_excluded = df[status_col].astype(str).str.strip().isin(excluded_statuses)
+        if is_excluded.any():
+            n_excluded = int(is_excluded.sum())
+            exclusion_note = (
+                f"{channel}: excluded {n_excluded} row(s) with {status_col} in "
+                f"{excluded_statuses} (cancelled/invalid orders) from revenue and units."
+            )
+            df = df[~is_excluded]
+
     out = pd.DataFrame(index=df.index)
 
     # date
@@ -87,7 +135,7 @@ def _standardize_one(df: pd.DataFrame, channel: str) -> pd.DataFrame:
 
     out["channel"] = channel
     out = out.dropna(subset=["date"])
-    return out[STANDARD_COLS]
+    return out[STANDARD_COLS], exclusion_note
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -102,7 +150,28 @@ def get_channel_drr(channel: str) -> tuple[pd.DataFrame, list[str]]:
             warnings.append(f"{channel} / {tab}: {err}")
             continue
         frames.append(_standardize_one(raw, channel))
-    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=STANDARD_COLS)
+    parsed_frames = []
+    for standardized, note in frames:
+        parsed_frames.append(standardized)
+        if note:
+            warnings.append(note)
+    combined = pd.concat(parsed_frames, ignore_index=True) if parsed_frames else pd.DataFrame(columns=STANDARD_COLS)
+
+    # Safety net: a handful of rows dated after today almost always means a
+    # date got misread (e.g. day/month ambiguity), not a real future order.
+    # Surface it as a warning rather than letting it silently sit in the charts.
+    today = pd.Timestamp.now().normalize()
+    future_rows = combined[combined["date"] > today]
+    if not future_rows.empty:
+        n = len(future_rows)
+        dates = ", ".join(sorted(future_rows["date"].dt.strftime("%Y-%m-%d").unique())[:5])
+        warnings.append(
+            f"{channel}: {n} row(s) have a date after today ({dates}"
+            f"{'…' if future_rows['date'].nunique() > 5 else ''}) — likely a date "
+            f"formatting issue in the sheet rather than real future orders. "
+            f"These are still included in totals; worth checking the source tab."
+        )
+
     return combined, warnings
 
 
