@@ -6,6 +6,7 @@ import streamlit as st
 from config import CHANNELS, MASTER_SHEET
 from sheets_connector import clear_cache, list_tabs, load_tab
 from data_pipeline import get_all_drr, get_channel_drr, get_ad_spend, get_myntra_imp, get_pricing_tab
+from sku_master_pipeline import get_sku_master
 from formatting import format_inr, format_inr_short, format_units_short
 
 st.set_page_config(page_title="Marketplace DRR Dashboard", layout="wide", page_icon="📈")
@@ -136,8 +137,9 @@ if not drr_df.empty:
         start, end = date_range
         drr_df = drr_df[(drr_df["date"].dt.date >= start) & (drr_df["date"].dt.date <= end)]
 
-tab_overview, tab_channel, tab_ads, tab_pricing, tab_raw = st.tabs(
-    ["📊 Overview", "🔍 Channel Deep-Dive", "💰 Ad Spends & ROAS", "🏷️ Pricing (Master Sheet)", "🗂️ Raw Sheet Explorer"]
+tab_overview, tab_channel, tab_ads, tab_pricing, tab_sku, tab_raw = st.tabs(
+    ["📊 Overview", "🔍 Channel Deep-Dive", "💰 Ad Spends & ROAS", "🏷️ Pricing (Master Sheet)",
+     "🧬 SKU Master", "🗂️ Raw Sheet Explorer"]
 )
 
 
@@ -344,6 +346,56 @@ with tab_pricing:
                 st.info("No rows found.")
             else:
                 st.dataframe(pdf, use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# SKU MASTER — live product master, auto-updates whenever the Master Sheet
+# or any of the SKU-code lookup source sheets change. No manual re-export.
+# ---------------------------------------------------------------------------
+with tab_sku:
+    st.caption(
+        "Built live from the Master Sheet's pricing tabs, joined to each channel's own SKU-code "
+        "lookup where one exists (Amazon, Purplle, Myntra, Flipkart). Updates automatically — "
+        "add a new product to the Master Sheet and it appears here on the next refresh."
+    )
+    long_df, comparison_df, sku_warnings = get_sku_master()
+
+    if long_df.empty:
+        st.info("No SKU Master data loaded yet — check the Master Sheet URL in config.py.")
+    else:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total SKUs", f"{len(long_df):,}")
+        verified_pct = (long_df["Match Basis"].str.startswith("SKU-code lookup")).mean() * 100
+        c2.metric("Verified by SKU code", f"{verified_pct:.0f}%")
+        c3.metric("Product concepts matched across channels", f"{(comparison_df['# Channels Found In'] >= 2).sum()} of {len(comparison_df)}")
+
+        st.markdown("#### Cross-Channel Comparison")
+        st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+        with st.expander("Full SKU list (every row, every channel)"):
+            st.dataframe(long_df, use_container_width=True, hide_index=True)
+
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "⬇️ Download as JSON",
+                data=comparison_df.to_json(orient="records", indent=2),
+                file_name="sku_master.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with dl2:
+            st.download_button(
+                "⬇️ Download as CSV",
+                data=comparison_df.to_csv(index=False),
+                file_name="sku_master.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    if sku_warnings:
+        with st.expander(f"⚠️ {len(sku_warnings)} warning(s)"):
+            for w in sku_warnings:
+                st.write("-", w)
 
 # ---------------------------------------------------------------------------
 # RAW SHEET EXPLORER — open literally any tab in any configured sheet
