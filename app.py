@@ -129,7 +129,9 @@ drr_df, drr_warnings = get_all_drr(selected_channels)
 
 if not drr_df.empty:
     min_d, max_d = drr_df["date"].min().date(), drr_df["date"].max().date()
-    date_range = st.sidebar.date_input("Date range", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+    date_range = st.sidebar.date_input(
+        "Date range", value=(min_d, max_d), min_value=min_d, max_value=max_d, format="DD/MM/YYYY"
+    )
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start, end = date_range
         drr_df = drr_df[(drr_df["date"].dt.date >= start) & (drr_df["date"].dt.date <= end)]
@@ -214,6 +216,8 @@ with tab_overview:
         section("Daily DRR summary")
         pivot = drr_df.pivot_table(index=drr_df["date"].dt.date, columns="channel", values="revenue", aggfunc="sum", fill_value=0)
         pivot = pivot.sort_index(ascending=False)
+        pivot.index = pd.to_datetime(pivot.index).strftime("%d-%m-%Y")
+        pivot.index.name = "date"
         display_pivot = pivot.map(format_inr)
         st.dataframe(display_pivot, use_container_width=True)
 
