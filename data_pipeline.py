@@ -33,7 +33,12 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}")  # YYYY-MM-DD... is never a
 def _parse_one_date(value):
     """Parse a single cell that may be a Sheets serial number, a date object,
     a text date, or blank."""
-    if value is None or value == "":
+    try:
+        if pd.isna(value):
+            return pd.NaT
+    except (TypeError, ValueError):
+        pass  # value wasn't a type pd.isna can evaluate — fall through
+    if isinstance(value, str) and value.strip() == "":
         return pd.NaT
     if isinstance(value, bool):
         return pd.NaT
@@ -48,11 +53,25 @@ def _parse_one_date(value):
         # Already YYYY-MM-DD — unambiguous, so dayfirst must NOT be applied
         # here (dayfirst=True incorrectly swaps month/day even on ISO strings).
         return pd.to_datetime(text, errors="coerce")
-    # Fallback: a genuinely ambiguous text date (e.g. "12-08-2026"). dayfirst=True
-    # because every source sheet here is an Indian marketplace export
-    # (DD-MM-YYYY convention) — parsing US-style by default is what silently
-    # swapped day/month before.
-    return pd.to_datetime(text, errors="coerce", dayfirst=True)
+
+    # Genuinely ambiguous text date (e.g. "08-12-2026"). Try both readings —
+    # day-first (Indian convention, our default assumption) and month-first
+    # (US convention, in case that's how it was actually typed) — and if
+    # exactly one of them is a plausible non-future date while the other
+    # isn't, trust that one. A sales order dated in the future is never
+    # correct, so this self-corrects cases where the default guess was wrong,
+    # instead of always assuming one convention no matter what.
+    dayfirst_guess = pd.to_datetime(text, errors="coerce", dayfirst=True)
+    monthfirst_guess = pd.to_datetime(text, errors="coerce", dayfirst=False)
+    today = pd.Timestamp.now().normalize()
+    if pd.notna(dayfirst_guess) and pd.notna(monthfirst_guess) and dayfirst_guess != monthfirst_guess:
+        dayfirst_ok = dayfirst_guess <= today
+        monthfirst_ok = monthfirst_guess <= today
+        if dayfirst_ok and not monthfirst_ok:
+            return dayfirst_guess
+        if monthfirst_ok and not dayfirst_ok:
+            return monthfirst_guess
+    return dayfirst_guess if pd.notna(dayfirst_guess) else monthfirst_guess
 
 
 def _safe_parse_dates(series: pd.Series) -> pd.Series:
