@@ -168,6 +168,56 @@ with tab_overview:
         with c4:
             st.markdown(kpi_card("Avg Daily Units (DRR)", f"{total_units / n_days:,.0f}", f"{total_units / n_days:,.1f} units / day"), unsafe_allow_html=True)
 
+        # -------------------------------------------------------------
+        # Channel growth selector — pick one channel (or all combined)
+        # to see its month-wise trend and month-over-month growth.
+        # -------------------------------------------------------------
+        section("📅 Channel Growth")
+        growth_channel = st.selectbox(
+            "Channel", ["All Channels (combined)"] + selected_channels, key="growth_channel_select"
+        )
+        gdf = drr_df if growth_channel == "All Channels (combined)" else drr_df[drr_df["channel"] == growth_channel]
+
+        if gdf.empty:
+            st.info(f"No data for {growth_channel} in this date range.")
+        else:
+            monthly = gdf.groupby(gdf["date"].dt.to_period("M"))["revenue"].sum().reset_index()
+            monthly["date"] = monthly["date"].dt.to_timestamp()
+            monthly = monthly.sort_values("date")
+            monthly["month_label"] = monthly["date"].dt.strftime("%b %Y")
+            monthly["revenue_label"] = monthly["revenue"].apply(format_inr)
+            monthly["mom_growth_pct"] = monthly["revenue"].pct_change() * 100
+
+            cA, cB = st.columns(2)
+            with cA:
+                st.markdown(f"###### {growth_channel} — Monthly revenue")
+                fig_m = px.bar(monthly, x="month_label", y="revenue", custom_data=["revenue_label"],
+                                color_discrete_sequence=["#4C9AFF"])
+                fig_m.update_traces(hovertemplate="%{x}<br>%{customdata[0]}<extra></extra>")
+                st.plotly_chart(style_fig(fig_m, y_title="Revenue (₹)"), use_container_width=True)
+            with cB:
+                st.markdown(f"###### {growth_channel} — Month-over-month growth")
+                g = monthly.dropna(subset=["mom_growth_pct"]).copy()
+                if g.empty:
+                    st.info("Need at least 2 months of data to show growth.")
+                else:
+                    g["growth_label"] = g["mom_growth_pct"].apply(lambda v: f"{v:+.1f}%")
+                    g["color"] = g["mom_growth_pct"].apply(lambda v: "#2ECC71" if v >= 0 else "#E74C3C")
+                    fig_g = px.bar(g, x="month_label", y="mom_growth_pct", custom_data=["growth_label"])
+                    fig_g.update_traces(marker_color=g["color"], hovertemplate="%{x}<br>%{customdata[0]}<extra></extra>")
+                    fig_g.add_hline(y=0, line_color="rgba(255,255,255,0.3)")
+                    st.plotly_chart(style_fig(fig_g, y_title="MoM growth (%)"), use_container_width=True)
+
+            st.markdown(f"###### {growth_channel} — Average revenue by day of week")
+            dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            dow = gdf.groupby(gdf["date"].dt.day_name())["revenue"].mean().reindex(dow_order).reset_index()
+            dow.columns = ["day", "avg_revenue"]
+            dow["label"] = dow["avg_revenue"].apply(lambda v: format_inr(v) if pd.notna(v) else "—")
+            fig_dow = px.bar(dow, x="day", y="avg_revenue", custom_data=["label"],
+                              color_discrete_sequence=["#9B59B6"])
+            fig_dow.update_traces(hovertemplate="%{x}<br>%{customdata[0]}<extra></extra>")
+            st.plotly_chart(style_fig(fig_dow, y_title="Avg Revenue (₹)"), use_container_width=True)
+
         section("Revenue trend")
         show_breakdown = st.toggle("Break down by channel", value=False)
         if show_breakdown:
